@@ -6,17 +6,20 @@ import gspread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = os.environ.get('8223277881:AAHni2UtkUEX9IJkcPIzQI5LaBJLrhj4T20')
+TOKEN = os.environ.get("8223277881:AAHni2UtkUEX9IJkcPIzQI5LaBJLrhj4T20")
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
 SHEET_ID = os.environ.get('IezMIojsunrXNWfV5ngm3WYttjQRjMzu13r6mzVh8lA')
 if not SHEET_ID:
-    raise ValueError("SHEET_ID environment variable is not set. Please provide your Google Sheet ID from the URL")
+    raise ValueError(
+        "SHEET_ID environment variable is not set. Please provide your Google Sheet ID from the URL"
+    )
 
 creds_json = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
 if not creds_json:
-    raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable is not set")
+    raise ValueError(
+        "GOOGLE_SHEETS_CREDENTIALS environment variable is not set")
 
 try:
     creds_dict = json.loads(creds_json)
@@ -35,42 +38,36 @@ except Exception as e:
     print("2. The spreadsheet is shared with the service account email")
     raise
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Hi! Send me your expense like:\n\n"
-        "Lunch 12.50\n\n"
-        "or send a photo of your receipt."
-    )
+    await update.message.reply_text("👋 Hi! Send me your expense like:\n\n"
+                                    "Lunch 12.50\n\n"
+                                    "or send a photo of your receipt.")
+
 
 async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     parts = text.split()
-    
+
     if not parts:
-        await update.message.reply_text(
-            "❌ Please send in this format:\n"
-            "Example: Coffee 3.75"
-        )
+        await update.message.reply_text("❌ Please send in this format:\n"
+                                        "Example: Coffee 3.75")
         return
-    
+
     try:
         amount = float(parts[-1])
         description = " ".join(parts[:-1])
-        
+
         if not description:
-            await update.message.reply_text(
-                "❌ Please include a description.\n"
-                "Example: Coffee 3.75"
-            )
+            await update.message.reply_text("❌ Please include a description.\n"
+                                            "Example: Coffee 3.75")
             return
-        
+
         if amount < 0:
-            await update.message.reply_text(
-                "❌ Amount must be positive.\n"
-                "Example: Coffee 3.75"
-            )
+            await update.message.reply_text("❌ Amount must be positive.\n"
+                                            "Example: Coffee 3.75")
             return
-        
+
         date = datetime.date.today().isoformat()
         row_data = [date, description, str(amount), ""]
         print(f"Saving row: {row_data}")
@@ -79,30 +76,29 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(
             "❌ Invalid amount. Please send in this format:\n"
-            "Example: Coffee 3.75"
-        )
+            "Example: Coffee 3.75")
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ Error saving expense: {str(e)}"
-        )
+        await update.message.reply_text(f"❌ Error saving expense: {str(e)}")
+
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         photo = update.message.photo[-1]
         file_id = photo.file_id
         date = datetime.date.today().isoformat()
-        await asyncio.to_thread(sheet.append_row, [date, "Receipt Photo", "", file_id])
+        await asyncio.to_thread(sheet.append_row,
+                                [date, "Receipt Photo", "", file_id])
         await update.message.reply_text("📸 Receipt saved to Google Sheet!")
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ Error saving receipt: {str(e)}"
-        )
+        await update.message.reply_text(f"❌ Error saving receipt: {str(e)}")
+
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
+
     print("🤖 Bot is running...")
     app.run_polling()
