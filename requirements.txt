@@ -1,3 +1,7 @@
 python-telegram-bot==20.3
 gspread==6.2.1
 google-auth==2.41.1
+google-auth
+gspread
+python-telegram-bot
+telegram
