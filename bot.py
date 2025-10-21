@@ -72,7 +72,9 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         date = datetime.date.today().isoformat()
-        await asyncio.to_thread(sheet.append_row, [date, description, amount, ""])
+        row_data = [date, description, amount, ""]
+        print(f"Saving row: {row_data}")
+        await asyncio.to_thread(sheet.append_row, row_data)
         await update.message.reply_text(f"✅ Saved: {description} - ${amount}")
     except ValueError:
         await update.message.reply_text(
