@@ -1,6 +1,7 @@
 import os
 import datetime
 import json
+import asyncio
 import gspread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -17,10 +18,22 @@ creds_json = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
 if not creds_json:
     raise ValueError("GOOGLE_SHEETS_CREDENTIALS environment variable is not set")
 
-creds_dict = json.loads(creds_json)
+try:
+    creds_dict = json.loads(creds_json)
+except json.JSONDecodeError as e:
+    raise ValueError(f"GOOGLE_SHEETS_CREDENTIALS is not valid JSON: {str(e)}")
+
 gc = gspread.service_account_from_dict(creds_dict)
 
-sheet = gc.open_by_key(SHEET_ID).sheet1
+try:
+    sheet = gc.open_by_key(SHEET_ID).sheet1
+    print(f"✅ Connected to Google Sheet (ID: {SHEET_ID})")
+except Exception as e:
+    print(f"❌ Failed to connect to Google Sheet: {str(e)}")
+    print("Please ensure:")
+    print("1. Google Sheets API is enabled in your Google Cloud project")
+    print("2. The spreadsheet is shared with the service account email")
+    raise
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -51,8 +64,15 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
+        if amount < 0:
+            await update.message.reply_text(
+                "❌ Amount must be positive.\n"
+                "Example: Coffee 3.75"
+            )
+            return
+        
         date = datetime.date.today().isoformat()
-        sheet.append_row([date, description, amount, ""])
+        await asyncio.to_thread(sheet.append_row, [date, description, amount, ""])
         await update.message.reply_text(f"✅ Saved: {description} - ${amount}")
     except ValueError:
         await update.message.reply_text(
@@ -69,7 +89,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = update.message.photo[-1]
         file_id = photo.file_id
         date = datetime.date.today().isoformat()
-        sheet.append_row([date, "Receipt Photo", "", file_id])
+        await asyncio.to_thread(sheet.append_row, [date, "Receipt Photo", "", file_id])
         await update.message.reply_text("📸 Receipt saved to Google Sheet!")
     except Exception as e:
         await update.message.reply_text(

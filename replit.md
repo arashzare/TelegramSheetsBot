@@ -5,10 +5,11 @@ A Python Telegram bot that connects to Google Sheets for automatic expense track
 
 ## Features
 - Text-based expense logging (description + amount)
-- Photo receipt handling with URL storage
+- Photo receipt handling with file ID storage
 - Automatic date stamping
 - Real-time confirmation messages
 - Google Sheets integration for data persistence
+- Async operations to prevent blocking
 
 ## Architecture
 - **bot.py**: Main bot application with Telegram handlers and Google Sheets integration
@@ -18,14 +19,25 @@ A Python Telegram bot that connects to Google Sheets for automatic expense track
 ## Setup Requirements
 1. **Telegram Bot Token**: Obtain from @BotFather on Telegram
 2. **Google Sheets Service Account**: Create in Google Cloud Console with Sheets API enabled
-3. **Google Sheet Name**: The spreadsheet where expenses will be logged (share with service account email)
+3. **Google Sheet ID**: The spreadsheet ID from the URL where expenses will be logged
+4. **Share Sheet**: Share the Google Sheet with the service account email (from credentials JSON) with Editor access
 
 ## Environment Variables
 - `BOT_TOKEN`: Telegram bot token from BotFather
 - `GOOGLE_SHEETS_CREDENTIALS`: JSON service account credentials
-- `SHEET_NAME`: Name of the Google Sheet (default: "Expenses")
+- `SHEET_ID`: Google Sheet ID from the spreadsheet URL
+
+## Important Setup Note
+The Google Cloud project associated with your service account credentials MUST have the Google Sheets API enabled. Visit:
+https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=YOUR_PROJECT_ID
+
+Replace YOUR_PROJECT_ID with the project ID from your service account credentials.
 
 ## Recent Changes
-- 2025-10-20: Initial project setup with Python 3.11
-- 2025-10-20: Created bot.py with expense tracking and receipt photo handling
-- 2025-10-20: Installed dependencies (python-telegram-bot, gspread, google-auth)
+- 2025-10-21: Initial project setup with Python 3.11
+- 2025-10-21: Created bot.py with expense tracking and receipt photo handling
+- 2025-10-21: Installed dependencies (python-telegram-bot, gspread, google-auth)
+- 2025-10-21: Improved error handling and validation
+- 2025-10-21: Changed to use SHEET_ID instead of SHEET_NAME to avoid Drive API requirement
+- 2025-10-21: Added async operations with asyncio.to_thread to prevent event loop blocking
+- 2025-10-21: Fixed photo handling to store file_id instead of file_path
