@@ -2,11 +2,12 @@ import os
 import datetime
 import json
 import asyncio
-import base64
 import gspread
+import re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from openai import OpenAI
+from google.cloud import vision
+from google.oauth2 import service_account
 
 TOKEN = os.environ.get('BOT_TOKEN')
 if not TOKEN:
@@ -38,13 +39,14 @@ except Exception as e:
     print("2. The spreadsheet is shared with the service account email")
     raise
 
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    print("⚠️ Warning: OPENAI_API_KEY not set. Receipt OCR will not work.")
-    openai_client = None
-else:
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    print("✅ OpenAI client initialized for receipt OCR")
+try:
+    vision_credentials = service_account.Credentials.from_service_account_info(creds_dict)
+    vision_client = vision.ImageAnnotatorClient(credentials=vision_credentials)
+    print("✅ Google Cloud Vision client initialized for receipt OCR")
+except Exception as e:
+    print(f"⚠️ Warning: Could not initialize Vision API: {str(e)}")
+    print("Receipt OCR will not work.")
+    vision_client = None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -90,6 +92,74 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error saving expense: {str(e)}")
 
 
+def extract_receipt_info(text):
+    date = datetime.date.today().isoformat()
+    description = "Unknown"
+    amount = 0.0
+    
+    lines = text.split('\n')
+    
+    date_patterns = [
+        r'\d{4}[-/]\d{1,2}[-/]\d{1,2}',
+        r'\d{1,2}[-/]\d{1,2}[-/]\d{4}',
+        r'\d{1,2}[-/]\d{1,2}[-/]\d{2}',
+    ]
+    
+    for line in lines:
+        for pattern in date_patterns:
+            match = re.search(pattern, line)
+            if match:
+                date_str = match.group()
+                try:
+                    if '/' in date_str:
+                        date_parts = date_str.split('/')
+                        if len(date_parts[0]) == 4:
+                            parsed_date = datetime.datetime.strptime(date_str, '%Y/%m/%d')
+                        elif len(date_parts[2]) == 4:
+                            parsed_date = datetime.datetime.strptime(date_str, '%m/%d/%Y')
+                        else:
+                            parsed_date = datetime.datetime.strptime(date_str, '%m/%d/%y')
+                    else:
+                        date_parts = date_str.split('-')
+                        if len(date_parts[0]) == 4:
+                            parsed_date = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+                        elif len(date_parts[2]) == 4:
+                            parsed_date = datetime.datetime.strptime(date_str, '%m-%d-%Y')
+                        else:
+                            parsed_date = datetime.datetime.strptime(date_str, '%m-%d-%y')
+                    date = parsed_date.strftime('%Y-%m-%d')
+                    break
+                except:
+                    pass
+        if date != datetime.date.today().isoformat():
+            break
+    
+    if len(lines) > 0:
+        description = lines[0].strip()
+    
+    amount_patterns = [
+        r'total[:\s]*\$?\s*(\d+\.\d{2})',
+        r'amount[:\s]*\$?\s*(\d+\.\d{2})',
+        r'\$\s*(\d+\.\d{2})',
+        r'(\d+\.\d{2})',
+    ]
+    
+    for line in reversed(lines):
+        line_lower = line.lower()
+        for pattern in amount_patterns:
+            match = re.search(pattern, line_lower)
+            if match:
+                try:
+                    amount = float(match.group(1))
+                    break
+                except:
+                    pass
+        if amount > 0:
+            break
+    
+    return date, description, amount
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("🔍 Analyzing receipt image...")
@@ -100,68 +170,30 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file = await context.bot.get_file(file_id)
         photo_bytes = await photo_file.download_as_bytearray()
         
-        base64_image = base64.b64encode(photo_bytes).decode('utf-8')
-        
-        if not openai_client:
-            await update.message.reply_text("❌ OCR not available. Please set OPENAI_API_KEY.")
+        if not vision_client:
+            await update.message.reply_text("❌ OCR not available. Vision API not initialized.")
             return
         
-        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
-        # do not change this unless explicitly requested by the user
+        image = vision.Image(content=bytes(photo_bytes))
+        
         response = await asyncio.to_thread(
-            lambda: openai_client.chat.completions.create(
-                model="gpt-5",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Analyze this receipt image and extract three pieces of information:\n"
-                                       "1. Date (in YYYY-MM-DD format)\n"
-                                       "2. Restaurant/vendor name\n"
-                                       "3. Total amount (numerical value only)\n\n"
-                                       "Return the information in this exact format:\n"
-                                       "DATE: YYYY-MM-DD\n"
-                                       "DESCRIPTION: Restaurant Name\n"
-                                       "AMOUNT: XX.XX\n\n"
-                                       "If you cannot find any field, use these defaults:\n"
-                                       "- Date: today's date\n"
-                                       "- Description: Unknown\n"
-                                       "- Amount: 0"
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                            }
-                        ]
-                    }
-                ],
-                max_completion_tokens=200
-            )
+            vision_client.text_detection,
+            image=image
         )
         
-        response_text = response.choices[0].message.content.strip()
+        if response.error.message:
+            raise Exception(f"Vision API error: {response.error.message}")
         
-        date = datetime.date.today().isoformat()
-        description = "Unknown"
-        amount = 0.0
+        if not response.text_annotations:
+            await update.message.reply_text("❌ No text found in the image.")
+            return
         
-        for line in response_text.split('\n'):
-            if line.startswith('DATE:'):
-                extracted_date = line.split('DATE:')[1].strip()
-                if extracted_date and extracted_date.lower() != 'unknown':
-                    date = extracted_date
-            elif line.startswith('DESCRIPTION:'):
-                extracted_desc = line.split('DESCRIPTION:')[1].strip()
-                if extracted_desc and extracted_desc.lower() != 'unknown':
-                    description = extracted_desc
-            elif line.startswith('AMOUNT:'):
-                amount_text = line.split('AMOUNT:')[1].strip()
-                try:
-                    amount = float(amount_text)
-                except ValueError:
-                    amount = 0.0
+        detected_text = response.text_annotations[0].description
+        
+        print(f"Detected text:\n{detected_text}", flush=True)
+        
+        date, description, amount = extract_receipt_info(detected_text)
+        
         row_data = [date, description, str(amount), file_id]
         
         print(f"Saving receipt: Date={date}, Description={description}, Amount={amount}, FileID={file_id}", flush=True)
