@@ -6,11 +6,11 @@ import gspread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = os.environ.get('BOT_TOKEN')
+TOKEN = os.environ.get('8223277881:AAHni2UtkUEX9IJkcPIzQI5LaBJLrhj4T20')
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-SHEET_ID = os.environ.get('SHEET_ID')
+SHEET_ID = os.environ.get('IezMIojsunrXNWfV5ngm3WYttjQRjMzu13r6mzVh8lA')
 if not SHEET_ID:
     raise ValueError("SHEET_ID environment variable is not set. Please provide your Google Sheet ID from the URL")
 
