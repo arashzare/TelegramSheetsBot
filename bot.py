@@ -2,10 +2,11 @@ import os
 import datetime
 import json
 import asyncio
-import requests
+import base64
 import gspread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from openai import OpenAI
 
 TOKEN = os.environ.get('BOT_TOKEN')
 if not TOKEN:
@@ -37,8 +38,13 @@ except Exception as e:
     print("2. The spreadsheet is shared with the service account email")
     raise
 
-OCR_API_KEY = os.environ.get('OCR_SPACE_API_KEY', 'helloworld')
-print("✅ Using OCR.Space for free receipt OCR")
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    print("⚠️ Warning: OPENAI_API_KEY not set. Receipt OCR will not work.")
+    openai_client = None
+else:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    print("✅ OpenAI client initialized for receipt OCR")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,38 +90,6 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error saving expense: {str(e)}")
 
 
-async def extract_amount_from_text(ocr_text):
-    import re
-    lines = ocr_text.split('\n')
-    
-    total_patterns = [
-        r'total[:\s]*\$?\s*(\d+[.,]\d{2})',
-        r'amount[:\s]*\$?\s*(\d+[.,]\d{2})',
-        r'grand\s*total[:\s]*\$?\s*(\d+[.,]\d{2})',
-        r'balance[:\s]*\$?\s*(\d+[.,]\d{2})',
-        r'\$\s*(\d+[.,]\d{2})\s*$'
-    ]
-    
-    for line in reversed(lines):
-        line_lower = line.lower().strip()
-        for pattern in total_patterns:
-            match = re.search(pattern, line_lower)
-            if match:
-                amount_str = match.group(1).replace(',', '.')
-                try:
-                    return float(amount_str)
-                except ValueError:
-                    continue
-    
-    all_amounts = re.findall(r'\$?\s*(\d+[.,]\d{2})', ocr_text)
-    if all_amounts:
-        try:
-            return max([float(amt.replace(',', '.')) for amt in all_amounts])
-        except ValueError:
-            pass
-    
-    return 0.0
-
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("🔍 Analyzing receipt image...")
@@ -124,35 +98,47 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_id = photo.file_id
         
         photo_file = await context.bot.get_file(file_id)
-        file_url = photo_file.file_path
+        photo_bytes = await photo_file.download_as_bytearray()
         
-        def ocr_image(url):
-            api_url = 'https://api.ocr.space/parse/image'
-            payload = {
-                'apikey': OCR_API_KEY,
-                'url': url,
-                'language': 'eng',
-                'isOverlayRequired': False
-            }
-            response = requests.post(api_url, data=payload)
-            result = response.json()
-            
-            if result.get('IsErroredOnProcessing'):
-                return None
-            
-            if result.get('ParsedResults'):
-                return result['ParsedResults'][0]['ParsedText']
-            return None
+        base64_image = base64.b64encode(photo_bytes).decode('utf-8')
         
-        ocr_text = await asyncio.to_thread(ocr_image, file_url)
-        
-        if not ocr_text:
-            await update.message.reply_text("❌ Could not read text from image. Please try again.")
+        if not openai_client:
+            await update.message.reply_text("❌ OCR not available. Please set OPENAI_API_KEY.")
             return
         
-        print(f"OCR extracted text: {ocr_text[:200]}", flush=True)
+        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
+        # do not change this unless explicitly requested by the user
+        response = await asyncio.to_thread(
+            lambda: openai_client.chat.completions.create(
+                model="gpt-5",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Analyze this receipt image and extract the total amount. "
+                                       "Only return the numerical value of the total amount (e.g., 12.50). "
+                                       "If you cannot find a total, return 0. "
+                                       "Do not include currency symbols or any other text."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ],
+                max_completion_tokens=100
+            )
+        )
         
-        amount = await extract_amount_from_text(ocr_text)
+        amount_text = response.choices[0].message.content.strip()
+        
+        try:
+            amount = float(amount_text)
+        except ValueError:
+            amount = 0.0
         
         date = datetime.date.today().isoformat()
         description = "Receipt Photo"
