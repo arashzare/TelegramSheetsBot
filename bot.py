@@ -117,10 +117,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Analyze this receipt image and extract the total amount. "
-                                       "Only return the numerical value of the total amount (e.g., 12.50). "
-                                       "If you cannot find a total, return 0. "
-                                       "Do not include currency symbols or any other text."
+                                "text": "Analyze this receipt image and extract three pieces of information:\n"
+                                       "1. Date (in YYYY-MM-DD format)\n"
+                                       "2. Restaurant/vendor name\n"
+                                       "3. Total amount (numerical value only)\n\n"
+                                       "Return the information in this exact format:\n"
+                                       "DATE: YYYY-MM-DD\n"
+                                       "DESCRIPTION: Restaurant Name\n"
+                                       "AMOUNT: XX.XX\n\n"
+                                       "If you cannot find any field, use these defaults:\n"
+                                       "- Date: today's date\n"
+                                       "- Description: Unknown\n"
+                                       "- Amount: 0"
                             },
                             {
                                 "type": "image_url",
@@ -129,28 +137,42 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ]
                     }
                 ],
-                max_completion_tokens=100
+                max_completion_tokens=200
             )
         )
         
-        amount_text = response.choices[0].message.content.strip()
-        
-        try:
-            amount = float(amount_text)
-        except ValueError:
-            amount = 0.0
+        response_text = response.choices[0].message.content.strip()
         
         date = datetime.date.today().isoformat()
-        description = "Receipt Photo"
+        description = "Unknown"
+        amount = 0.0
+        
+        for line in response_text.split('\n'):
+            if line.startswith('DATE:'):
+                extracted_date = line.split('DATE:')[1].strip()
+                if extracted_date and extracted_date.lower() != 'unknown':
+                    date = extracted_date
+            elif line.startswith('DESCRIPTION:'):
+                extracted_desc = line.split('DESCRIPTION:')[1].strip()
+                if extracted_desc and extracted_desc.lower() != 'unknown':
+                    description = extracted_desc
+            elif line.startswith('AMOUNT:'):
+                amount_text = line.split('AMOUNT:')[1].strip()
+                try:
+                    amount = float(amount_text)
+                except ValueError:
+                    amount = 0.0
         row_data = [date, description, str(amount), file_id]
         
-        print(f"Saving receipt: Date={date}, Amount={amount}, FileID={file_id}", flush=True)
+        print(f"Saving receipt: Date={date}, Description={description}, Amount={amount}, FileID={file_id}", flush=True)
         await asyncio.to_thread(sheet.append_row, row_data)
         
-        if amount > 0:
-            await update.message.reply_text(f"✅ Receipt saved! Amount detected: ${amount}")
-        else:
-            await update.message.reply_text("✅ Receipt saved but amount could not be detected. Amount set to 0.")
+        await update.message.reply_text(
+            f"✅ Receipt saved!\n\n"
+            f"📅 Date: {date}\n"
+            f"🏪 Restaurant: {description}\n"
+            f"💰 Amount: ${amount}"
+        )
             
     except Exception as e:
         print(f"Error processing receipt: {str(e)}", flush=True)
