@@ -2,9 +2,11 @@ import os
 import datetime
 import json
 import asyncio
+import base64
 import gspread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from openai import OpenAI
 
 TOKEN = os.environ.get('BOT_TOKEN')
 if not TOKEN:
@@ -35,6 +37,14 @@ except Exception as e:
     print("1. Google Sheets API is enabled in your Google Cloud project")
     print("2. The spreadsheet is shared with the service account email")
     raise
+
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    print("⚠️ Warning: OPENAI_API_KEY not set. Receipt OCR will not work.")
+    openai_client = None
+else:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    print("✅ OpenAI client initialized for receipt OCR")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,14 +92,69 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        await update.message.reply_text("🔍 Analyzing receipt image...")
+        
         photo = update.message.photo[-1]
         file_id = photo.file_id
+        
+        photo_file = await context.bot.get_file(file_id)
+        photo_bytes = await photo_file.download_as_bytearray()
+        
+        base64_image = base64.b64encode(photo_bytes).decode('utf-8')
+        
+        if not openai_client:
+            await update.message.reply_text("❌ OCR not available. Please set OPENAI_API_KEY.")
+            return
+        
+        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
+        # do not change this unless explicitly requested by the user
+        response = await asyncio.to_thread(
+            lambda: openai_client.chat.completions.create(
+                model="gpt-5",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Analyze this receipt image and extract the total amount. "
+                                       "Only return the numerical value of the total amount (e.g., 12.50). "
+                                       "If you cannot find a total, return 0. "
+                                       "Do not include currency symbols or any other text."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ],
+                max_completion_tokens=100
+            )
+        )
+        
+        amount_text = response.choices[0].message.content.strip()
+        
+        try:
+            amount = float(amount_text)
+        except ValueError:
+            amount = 0.0
+        
         date = datetime.date.today().isoformat()
-        await asyncio.to_thread(sheet.append_row,
-                                [date, "Receipt Photo", "", file_id])
-        await update.message.reply_text("📸 Receipt saved to Google Sheet!")
+        description = "Receipt Photo"
+        row_data = [date, description, str(amount), file_id]
+        
+        print(f"Saving receipt: Date={date}, Amount={amount}, FileID={file_id}", flush=True)
+        await asyncio.to_thread(sheet.append_row, row_data)
+        
+        if amount > 0:
+            await update.message.reply_text(f"✅ Receipt saved! Amount detected: ${amount}")
+        else:
+            await update.message.reply_text("✅ Receipt saved but amount could not be detected. Amount set to 0.")
+            
     except Exception as e:
-        await update.message.reply_text(f"❌ Error saving receipt: {str(e)}")
+        print(f"Error processing receipt: {str(e)}", flush=True)
+        await update.message.reply_text(f"❌ Error processing receipt: {str(e)}")
 
 
 if __name__ == '__main__':
